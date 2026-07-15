@@ -115,6 +115,22 @@
   .primary-btn:active{ transform:translateY(0); }
   .primary-btn svg{ width:16px; height:16px; stroke:#1a1206; }
 
+  .link-row{
+    display:flex; gap:10px; max-width:520px; margin-top:16px;
+  }
+  .link-row input{
+    flex:1; padding:11px 14px; border-radius:999px; border:1px solid var(--rule);
+    background:var(--spruce-900); color:var(--parchment); font-family:var(--font-ui); font-size:13px;
+  }
+  .link-row input:focus{ outline:none; border-color:var(--brass-bright); }
+  .link-row .ghost-btn{ border-radius:999px; }
+  .link-hint{ font-size:12px; color:var(--sage); max-width:520px; margin:10px 0 0; line-height:1.5; }
+
+  .book-tag{
+    font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:var(--brass-bright);
+    border:1px solid var(--rule); border-radius:999px; padding:2px 8px; align-self:flex-start;
+  }
+
   .shelf-label{
     font-size:12px; letter-spacing:0.12em; text-transform:uppercase; color:var(--sage);
     margin:44px 0 16px; display:flex; align-items:center; gap:12px;
@@ -260,6 +276,12 @@
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
       Open a book from Google Drive
     </button>
+
+    <div class="link-row">
+      <input type="text" id="link-input" placeholder="Or paste a Google Drive share link…">
+      <button class="ghost-btn" id="open-link-btn">Open</button>
+    </div>
+    <p class="link-hint">Works with no sign-in, on any device — as long as the file in Drive is shared as "Anyone with the link".</p>
 
     <div class="shelf-label">Recently opened</div>
     <div id="recents-grid" class="grid"></div>
@@ -489,7 +511,7 @@
 
   $('open-drive-btn').addEventListener('click', openPicker);
 
-  // ---------- Fetching & rendering the book ----------
+  // ---------- Fetching & rendering the book (signed-in, private files) ----------
   function openBookFromDrive(fileId, name){
     fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
       headers: { Authorization: 'Bearer ' + accessToken }
@@ -498,14 +520,61 @@
         return requestToken(true).then(() => openBookFromDrive(fileId, name));
       }
       if(!res.ok) throw new Error('Drive fetch failed: ' + res.status);
-      return res.arrayBuffer().then((buf) => loadBook(buf, fileId, name));
+      return res.arrayBuffer().then((buf) => loadBook(buf, fileId, name, 'private'));
     }).catch((err) => {
       console.error(err);
       alert('Could not open that file from Drive. Check the console for details.');
     });
   }
 
-  function loadBook(arrayBuffer, fileId, name){
+  // ---------- Fetching & rendering the book (no sign-in, publicly shared files) ----------
+  function extractFileId(raw){
+    raw = (raw || '').trim();
+    let m = raw.match(/\/d\/([a-zA-Z0-9_-]{15,})/);
+    if(m) return m[1];
+    m = raw.match(/[?&]id=([a-zA-Z0-9_-]{15,})/);
+    if(m) return m[1];
+    if(/^[a-zA-Z0-9_-]{15,}$/.test(raw)) return raw;
+    return null;
+  }
+
+  function openBookFromLink(rawLink){
+    const cfg = loadConfig();
+    if(!cfg.apiKey){ openSettings(); return; }
+    const fileId = extractFileId(rawLink);
+    if(!fileId){
+      alert('That doesn\'t look like a Google Drive file link. Right-click the file in Drive → Share → Copy link.');
+      return;
+    }
+    openBookFromPublicId(fileId);
+  }
+
+  function openBookFromPublicId(fileId){
+    const cfg = loadConfig();
+    const metaUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name&key=${cfg.apiKey}`;
+    fetch(metaUrl).then((res) => {
+      if(!res.ok) throw new Error('meta-failed:' + res.status);
+      return res.json();
+    }).then((meta) => {
+      const name = meta.name || 'Untitled.epub';
+      return fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${cfg.apiKey}`)
+        .then((res) => {
+          if(!res.ok) throw new Error('fetch-failed:' + res.status);
+          return res.arrayBuffer();
+        })
+        .then((buf) => loadBook(buf, fileId, name, 'public'));
+    }).catch((err) => {
+      console.error(err);
+      alert('Could not open that file. In Google Drive, right-click it → Share → change access to "Anyone with the link – Viewer", then try again.');
+    });
+  }
+
+  $('open-link-btn').addEventListener('click', () => openBookFromLink($('link-input').value));
+  $('link-input').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter') openBookFromLink($('link-input').value);
+  });
+
+  function loadBook(arrayBuffer, fileId, name, source){
     currentFileId = fileId;
     if(rendition){ try{ rendition.destroy(); }catch(e){} }
     book = ePub(arrayBuffer);
@@ -535,7 +604,7 @@
     libraryEl.classList.add('hidden');
     readerEl.classList.add('active');
 
-    upsertRecent(fileId, name);
+    upsertRecent(fileId, name, source);
   }
 
   function registerThemes(){
@@ -565,9 +634,9 @@
     });
   }
 
-  function upsertRecent(fileId, name){
+  function upsertRecent(fileId, name, source){
     let list = loadRecents().filter(b => b.id !== fileId);
-    list.unshift({ id: fileId, name, color: spineColor(name), ts: Date.now() });
+    list.unshift({ id: fileId, name, source: source || 'private', color: spineColor(name), ts: Date.now() });
     saveRecents(list);
     renderRecents();
   }
@@ -584,14 +653,20 @@
       const card = document.createElement('button');
       card.className = 'book-card';
       const pct = localStorage.getItem(progKey(b.id)) || 0;
+      const tag = b.source === 'public' ? '<div class="book-tag">no sign-in</div>' : '';
       card.innerHTML = `
         <div class="book-spine" style="background:${b.color}"></div>
         <div class="book-card-body">
+          ${tag}
           <div class="book-title">${escapeHtml(b.name.replace(/\.epub$/i,''))}</div>
           <div class="book-meta">${pct}% read</div>
           <div class="book-progress"><span style="width:${pct}%"></span></div>
         </div>`;
       card.addEventListener('click', () => {
+        if(b.source === 'public'){
+          openBookFromPublicId(b.id);
+          return;
+        }
         requestToken(false).then(() => openBookFromDrive(b.id, b.name)).catch((err) => {
           if(err && err.message === 'missing-config') return;
           requestToken(true).then(() => openBookFromDrive(b.id, b.name));
