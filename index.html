@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Athenaeum — ePub Reader for Google Drive</title>
+
+<!--
+  ATHENAEUM — a self-contained ePub reader that opens books straight from Google Drive.
+  ────────────────────────────────────────────────────────────────────────────────────
+  SETUP (do this once):
+  1. Go to https://console.cloud.google.com/ and create a project (or use an existing one).
+  2. APIs & Services → Library → enable "Google Drive API" and "Google Picker API".
+  3. APIs & Services → Credentials → Create Credentials → API key. Copy it.
+  4. APIs & Services → Credentials → Create Credentials → OAuth client ID → Web application.
+     - Add an Authorized JavaScript origin for wherever this file will be hosted,
+       e.g. https://yourname.github.io  (Google Sites' own "Embed by URL" iframe
+       does NOT need to be listed — only the origin that actually SERVES this file).
+     - Copy the Client ID.
+  5. OAuth consent screen → add your own Google account under "Test users" if the
+     app is in Testing mode (fine for personal use).
+  6. Open this page, click the gear icon, and paste in the API key + Client ID.
+     They're saved in your browser's localStorage only — never sent anywhere else.
+
+  DEPLOYING TO GOOGLE SITES:
+  Google Sites' "Embed code" box renders in a sandboxed iframe that can break Google
+  Sign-In. The reliable path is: host this single file somewhere with a real URL
+  (GitHub Pages, Firebase Hosting, Cloudflare Pages, etc. — all free), then in Google
+  Sites use Insert → Embed → "By URL" and paste that link. That gives the page a
+  proper origin so OAuth and the Drive Picker work normally.
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/epubjs/0.3.93/epub.min.js"></script>
+<script src="https://apis.google.com/js/api.js"></script>
+<script src="https://accounts.google.com/gsi/client"></script>
+
+<style>
+  :root{
+    --spruce-950:#101c16;
+    --spruce-900:#17281f;
+    --spruce-800:#213729;
+    --parchment:#efe6d3;
+    --parchment-dim:#e4d9c2;
+    --ink:#241f1a;
+    --brass:#b8863b;
+    --brass-bright:#d3a15a;
+    --sage:#8ba088;
+    --rule:rgba(184,134,59,0.35);
+    --shadow: 0 18px 40px rgba(9,15,11,0.35);
+    --radius:14px;
+    --font-display:'Fraunces', serif;
+    --font-body:'Source Serif 4', Georgia, serif;
+    --font-ui:'Inter', sans-serif;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:var(--spruce-950);
+    color:var(--parchment);
+    font-family:var(--font-ui);
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---------- App shell ---------- */
+  #app{ min-height:100%; display:flex; flex-direction:column; }
+
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:22px clamp(18px,4vw,48px);
+    border-bottom:1px solid var(--rule);
+    background:linear-gradient(180deg, var(--spruce-900), var(--spruce-950));
+  }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .brand-mark{ width:30px; height:30px; flex:none; }
+  .brand-name{
+    font-family:var(--font-display); font-weight:600; font-size:22px;
+    letter-spacing:0.01em; color:var(--parchment);
+  }
+  .brand-tag{ font-size:12px; color:var(--sage); letter-spacing:0.08em; text-transform:uppercase; margin-top:2px;}
+
+  .icon-btn{
+    background:transparent; border:1px solid var(--rule); color:var(--parchment);
+    width:38px; height:38px; border-radius:50%; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    transition:border-color .15s, transform .15s, background .15s;
+  }
+  .icon-btn:hover{ border-color:var(--brass-bright); background:rgba(184,134,59,0.12); }
+  .icon-btn:active{ transform:scale(0.94); }
+  .icon-btn svg{ width:18px; height:18px; stroke:var(--parchment); }
+
+  /* ---------- Library view ---------- */
+  #library{ flex:1; padding:clamp(24px,5vw,56px) clamp(18px,4vw,48px) 60px; }
+  .library-intro{ max-width:640px; margin-bottom:34px; }
+  .library-intro h1{
+    font-family:var(--font-display); font-weight:600; font-size:clamp(28px,4vw,40px);
+    margin:0 0 10px; color:var(--parchment);
+  }
+  .library-intro p{ margin:0; color:var(--sage); font-size:15px; line-height:1.6; }
+
+  .primary-btn{
+    font-family:var(--font-ui); font-weight:600; font-size:14px;
+    background:linear-gradient(180deg, var(--brass-bright), var(--brass));
+    color:#1a1206; border:none; padding:13px 22px; border-radius:999px;
+    cursor:pointer; display:inline-flex; align-items:center; gap:10px;
+    box-shadow:0 8px 22px rgba(184,134,59,0.28);
+    transition:transform .15s, box-shadow .15s;
+  }
+  .primary-btn:hover{ transform:translateY(-1px); box-shadow:0 12px 26px rgba(184,134,59,0.38); }
+  .primary-btn:active{ transform:translateY(0); }
+  .primary-btn svg{ width:16px; height:16px; stroke:#1a1206; }
+
+  .shelf-label{
+    font-size:12px; letter-spacing:0.12em; text-transform:uppercase; color:var(--sage);
+    margin:44px 0 16px; display:flex; align-items:center; gap:12px;
+  }
+  .shelf-label::after{ content:''; flex:1; height:1px; background:var(--rule); }
+
+  .grid{
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(190px,1fr)); gap:20px;
+  }
+  .book-card{
+    background:var(--spruce-900); border:1px solid var(--rule); border-radius:var(--radius);
+    overflow:hidden; cursor:pointer; text-align:left; padding:0;
+    display:flex; flex-direction:column;
+    transition:transform .15s, box-shadow .15s, border-color .15s;
+    font-family:var(--font-ui); color:var(--parchment);
+  }
+  .book-card:hover{ transform:translateY(-3px); box-shadow:var(--shadow); border-color:var(--brass); }
+  .book-spine{ height:10px; }
+  .book-card-body{ padding:16px 16px 18px; flex:1; display:flex; flex-direction:column; gap:8px; }
+  .book-title{ font-family:var(--font-display); font-weight:600; font-size:16px; line-height:1.3; }
+  .book-meta{ font-size:12px; color:var(--sage); }
+  .book-progress{ margin-top:auto; height:4px; border-radius:4px; background:rgba(255,255,255,0.08); overflow:hidden; }
+  .book-progress > span{ display:block; height:100%; background:var(--brass-bright); }
+
+  .empty-state{
+    border:1px dashed var(--rule); border-radius:var(--radius); padding:36px;
+    color:var(--sage); font-size:14px; text-align:center;
+  }
+
+  /* ---------- Reader view ---------- */
+  #reader{ display:none; flex:1; flex-direction:column; background:var(--parchment); color:var(--ink); }
+  #reader.active{ display:flex; }
+  #library.hidden{ display:none; }
+
+  .reader-toolbar{
+    display:flex; align-items:center; gap:8px; padding:12px clamp(12px,3vw,28px);
+    background:var(--spruce-950); border-bottom:1px solid var(--rule); flex-wrap:wrap;
+  }
+  .reader-title{
+    font-family:var(--font-display); font-size:14px; color:var(--parchment);
+    margin-right:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:38vw;
+  }
+  .tool-btn{
+    background:transparent; border:1px solid var(--rule); color:var(--parchment);
+    padding:8px 12px; border-radius:8px; cursor:pointer; font-family:var(--font-ui); font-size:13px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .tool-btn:hover{ border-color:var(--brass-bright); }
+  .tool-btn svg{ width:15px; height:15px; stroke:currentColor; }
+
+  #viewer-wrap{ flex:1; position:relative; overflow:hidden; }
+  #viewer{ position:absolute; inset:0; }
+
+  .nav-zone{
+    position:absolute; top:0; bottom:0; width:12%; z-index:5; cursor:pointer;
+    background:transparent; border:none;
+  }
+  .nav-zone.left{ left:0; } .nav-zone.right{ right:0; }
+
+  .reader-footer{
+    padding:10px clamp(12px,3vw,28px); background:var(--spruce-950);
+    display:flex; align-items:center; gap:14px; border-top:1px solid var(--rule);
+  }
+  .progress-track{ flex:1; height:4px; border-radius:4px; background:rgba(255,255,255,0.1); overflow:hidden; }
+  .progress-track > span{ display:block; height:100%; background:var(--brass-bright); width:0%; }
+  .progress-pct{ font-size:12px; color:var(--sage); min-width:38px; text-align:right; }
+
+  /* TOC drawer */
+  #toc-drawer{
+    position:fixed; top:0; right:-340px; width:320px; height:100%; background:var(--spruce-900);
+    border-left:1px solid var(--rule); z-index:50; transition:right .22s ease; padding:22px 18px;
+    overflow-y:auto;
+  }
+  #toc-drawer.open{ right:0; }
+  #toc-drawer h3{ font-family:var(--font-display); color:var(--parchment); margin:0 0 14px; font-size:18px; }
+  #toc-list a{
+    display:block; padding:9px 8px; color:var(--sage); text-decoration:none; font-size:13.5px;
+    border-radius:6px; line-height:1.4;
+  }
+  #toc-list a:hover{ background:rgba(184,134,59,0.12); color:var(--parchment); }
+
+  /* Settings modal */
+  .modal-backdrop{
+    position:fixed; inset:0; background:rgba(9,15,11,0.6); display:none;
+    align-items:center; justify-content:center; z-index:100; padding:20px;
+  }
+  .modal-backdrop.open{ display:flex; }
+  .modal{
+    background:var(--spruce-900); border:1px solid var(--rule); border-radius:var(--radius);
+    max-width:460px; width:100%; padding:28px; box-shadow:var(--shadow);
+  }
+  .modal h2{ font-family:var(--font-display); margin:0 0 6px; font-size:20px; color:var(--parchment); }
+  .modal p.hint{ font-size:13px; color:var(--sage); margin:0 0 20px; line-height:1.5; }
+  .field{ margin-bottom:16px; }
+  .field label{ display:block; font-size:12px; color:var(--sage); margin-bottom:6px; letter-spacing:0.03em; }
+  .field input{
+    width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--rule);
+    background:var(--spruce-950); color:var(--parchment); font-family:var(--font-ui); font-size:13px;
+  }
+  .field input:focus{ outline:none; border-color:var(--brass-bright); }
+  .modal-actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
+  .ghost-btn{
+    background:transparent; border:1px solid var(--rule); color:var(--parchment);
+    padding:10px 16px; border-radius:8px; cursor:pointer; font-family:var(--font-ui); font-size:13px;
+  }
+  .ghost-btn:hover{ border-color:var(--brass-bright); }
+  .status-line{ font-size:12px; color:var(--sage); margin-top:14px; min-height:16px; }
+  .status-line.error{ color:#d98b6c; }
+
+  @media (max-width:640px){
+    .reader-title{ max-width:30vw; }
+    .grid{ grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" fill="none">
+        <path d="M4 6c5 -2 9 -2 12 1v19c-3 -3 -7 -3 -12 -1z" fill="#efe6d3" opacity="0.9"/>
+        <path d="M28 6c-5 -2 -9 -2 -12 1v19c3 -3 7 -3 12 -1z" fill="#b8863b"/>
+      </svg>
+      <div>
+        <div class="brand-name">Athenaeum</div>
+        <div class="brand-tag">your drive, bound</div>
+      </div>
+    </div>
+    <button class="icon-btn" id="settings-btn" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </div>
+
+  <!-- Library -->
+  <div id="library">
+    <div class="library-intro">
+      <h1>Your shelf, wherever your books live.</h1>
+      <p>Athenaeum opens ePub files straight out of your Google Drive — nothing is uploaded anywhere else, and nothing is stored on a server. Connect your Drive, pick a book, and read.</p>
+    </div>
+    <button class="primary-btn" id="open-drive-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+      Open a book from Google Drive
+    </button>
+
+    <div class="shelf-label">Recently opened</div>
+    <div id="recents-grid" class="grid"></div>
+  </div>
+
+  <!-- Reader -->
+  <div id="reader">
+    <div class="reader-toolbar">
+      <button class="tool-btn" id="back-btn" title="Back to shelf">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+        Shelf
+      </button>
+      <div class="reader-title" id="reader-title">—</div>
+      <button class="tool-btn" id="font-minus-btn" title="Smaller text">A−</button>
+      <button class="tool-btn" id="font-plus-btn" title="Larger text">A+</button>
+      <button class="tool-btn" id="theme-btn" title="Toggle theme">Theme</button>
+      <button class="tool-btn" id="toc-btn" title="Table of contents">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>
+        Contents
+      </button>
+    </div>
+
+    <div id="viewer-wrap">
+      <button class="nav-zone left" id="prev-zone" aria-label="Previous page"></button>
+      <div id="viewer"></div>
+      <button class="nav-zone right" id="next-zone" aria-label="Next page"></button>
+    </div>
+
+    <div class="reader-footer">
+      <div class="progress-track"><span id="progress-fill"></span></div>
+      <div class="progress-pct" id="progress-pct">0%</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- TOC drawer -->
+<div id="toc-drawer">
+  <h3>Contents</h3>
+  <div id="toc-list"></div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-backdrop" id="settings-modal">
+  <div class="modal">
+    <h2>Connect Google Drive</h2>
+    <p class="hint">Paste in the API key and OAuth Client ID from your own Google Cloud project. These stay in this browser only. See the setup steps in the page source comments if you haven't created these yet.</p>
+    <div class="field">
+      <label for="input-client-id">OAuth Client ID</label>
+      <input id="input-client-id" type="text" placeholder="xxxxxxxx.apps.googleusercontent.com">
+    </div>
+    <div class="field">
+      <label for="input-api-key">API Key</label>
+      <input id="input-api-key" type="text" placeholder="AIza...">
+    </div>
+    <div class="modal-actions">
+      <button class="ghost-btn" id="disconnect-btn">Disconnect</button>
+      <button class="primary-btn" id="save-settings-btn">Save</button>
+    </div>
+    <div class="status-line" id="settings-status"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- Config / storage ----------
+  const CFG_KEY = 'athenaeum_config';
+  const RECENTS_KEY = 'athenaeum_recents';
+  const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
+
+  function loadConfig(){
+    try{ return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; }catch(e){ return {}; }
+  }
+  function saveConfig(cfg){ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+
+  function loadRecents(){
+    try{ return JSON.parse(localStorage.getItem(RECENTS_KEY)) || []; }catch(e){ return []; }
+  }
+  function saveRecents(list){ localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0,12))); }
+
+  function locKey(id){ return 'athenaeum_loc_' + id; }
+  function progKey(id){ return 'athenaeum_prog_' + id; }
+
+  // Deterministic accent color per book, drawn from a small literary palette.
+  const SPINE_COLORS = ['#b8863b','#7a8b77','#8c5c4a','#5c7a8b','#a3743f','#6f7d4f'];
+  function spineColor(seed){
+    let h = 0;
+    for(let i=0;i<seed.length;i++) h = (h*31 + seed.charCodeAt(i)) >>> 0;
+    return SPINE_COLORS[h % SPINE_COLORS.length];
+  }
+
+  // ---------- App state ----------
+  let tokenClient = null;
+  let accessToken = null;
+  let pickerLoaded = false;
+  let gapiLoaded = false;
+  let book = null, rendition = null, currentFileId = null;
+  let fontSize = 100;
+  let themeIdx = 0;
+  const THEMES = ['light','sepia','dark'];
+
+  // ---------- DOM refs ----------
+  const $ = (id) => document.getElementById(id);
+  const libraryEl = $('library'), readerEl = $('reader');
+  const settingsModal = $('settings-modal'), settingsStatus = $('settings-status');
+  const tocDrawer = $('toc-drawer');
+
+  // ---------- Settings modal ----------
+  function openSettings(){
+    const cfg = loadConfig();
+    $('input-client-id').value = cfg.clientId || '';
+    $('input-api-key').value = cfg.apiKey || '';
+    settingsStatus.textContent = '';
+    settingsStatus.className = 'status-line';
+    settingsModal.classList.add('open');
+  }
+  function closeSettings(){ settingsModal.classList.remove('open'); }
+
+  $('settings-btn').addEventListener('click', openSettings);
+  settingsModal.addEventListener('click', (e)=>{ if(e.target === settingsModal) closeSettings(); });
+
+  $('save-settings-btn').addEventListener('click', () => {
+    const clientId = $('input-client-id').value.trim();
+    const apiKey = $('input-api-key').value.trim();
+    if(!clientId || !apiKey){
+      settingsStatus.textContent = 'Both fields are required.';
+      settingsStatus.className = 'status-line error';
+      return;
+    }
+    saveConfig({clientId, apiKey});
+    tokenClient = null; accessToken = null; // force re-init with new credentials
+    settingsStatus.textContent = 'Saved. You can close this and connect Drive.';
+    settingsStatus.className = 'status-line';
+    setTimeout(closeSettings, 700);
+  });
+
+  $('disconnect-btn').addEventListener('click', () => {
+    if(accessToken && window.google && google.accounts){
+      google.accounts.oauth2.revoke(accessToken, () => {});
+    }
+    accessToken = null; tokenClient = null;
+    settingsStatus.textContent = 'Disconnected from this session.';
+    settingsStatus.className = 'status-line';
+  });
+
+  // ---------- Google API bootstrap ----------
+  window.addEventListener('load', () => {
+    // gapi (for Picker) and GIS (for OAuth) load via their own <script onload> in most
+    // setups, but since we didn't wire inline onload attrs, poll briefly instead.
+    const check = setInterval(() => {
+      if(window.gapi && !gapiLoaded){
+        gapiLoaded = true;
+        gapi.load('picker', () => { pickerLoaded = true; });
+      }
+      if(window.google && google.accounts && window.gapi){
+        clearInterval(check);
+      }
+    }, 150);
+    renderRecents();
+  });
+
+  function ensureTokenClient(){
+    const cfg = loadConfig();
+    if(!cfg.clientId || !cfg.apiKey) return null;
+    if(!tokenClient){
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: cfg.clientId,
+        scope: SCOPES,
+        callback: () => {}, // overridden per-call below
+      });
+    }
+    return tokenClient;
+  }
+
+  function requestToken(interactive){
+    return new Promise((resolve, reject) => {
+      const cfg = loadConfig();
+      if(!cfg.clientId || !cfg.apiKey){
+        openSettings();
+        reject(new Error('missing-config'));
+        return;
+      }
+      const client = ensureTokenClient();
+      if(!client){ reject(new Error('missing-config')); return; }
+      client.callback = (resp) => {
+        if(resp.error){ reject(resp); return; }
+        accessToken = resp.access_token;
+        resolve(accessToken);
+      };
+      client.requestAccessToken({ prompt: (interactive || !accessToken) ? 'consent' : '' });
+    });
+  }
+
+  // ---------- Drive Picker ----------
+  function openPicker(){
+    requestToken(!accessToken).then(() => {
+      if(!pickerLoaded){
+        setTimeout(openPicker, 300); // picker script still loading
+        return;
+      }
+      const cfg = loadConfig();
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setMimeTypes('application/epub+zip')
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(false);
+      const picker = new google.picker.PickerBuilder()
+        .addView(view)
+        .setOAuthToken(accessToken)
+        .setDeveloperKey(cfg.apiKey)
+        .setCallback(pickerCallback)
+        .build();
+      picker.setVisible(true);
+    }).catch((err) => {
+      if(err && err.message === 'missing-config') return;
+      console.error(err);
+    });
+  }
+
+  function pickerCallback(data){
+    if(data.action === google.picker.Action.PICKED){
+      const doc = data.docs[0];
+      openBookFromDrive(doc.id, doc.name);
+    }
+  }
+
+  $('open-drive-btn').addEventListener('click', openPicker);
+
+  // ---------- Fetching & rendering the book ----------
+  function openBookFromDrive(fileId, name){
+    fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    }).then((res) => {
+      if(res.status === 401){
+        return requestToken(true).then(() => openBookFromDrive(fileId, name));
+      }
+      if(!res.ok) throw new Error('Drive fetch failed: ' + res.status);
+      return res.arrayBuffer().then((buf) => loadBook(buf, fileId, name));
+    }).catch((err) => {
+      console.error(err);
+      alert('Could not open that file from Drive. Check the console for details.');
+    });
+  }
+
+  function loadBook(arrayBuffer, fileId, name){
+    currentFileId = fileId;
+    if(rendition){ try{ rendition.destroy(); }catch(e){} }
+    book = ePub(arrayBuffer);
+    rendition = book.renderTo('viewer', { width: '100%', height: '100%', flow: 'paginated', spread: 'auto' });
+
+    registerThemes();
+    rendition.themes.select(THEMES[themeIdx]);
+    rendition.themes.fontSize(fontSize + '%');
+
+    const savedLoc = localStorage.getItem(locKey(fileId));
+    rendition.display(savedLoc || undefined);
+
+    rendition.on('relocated', (loc) => {
+      localStorage.setItem(locKey(fileId), loc.start.cfi);
+      const pct = book.locations && book.locations.length()
+        ? Math.round(book.locations.percentageFromCfi(loc.start.cfi) * 100)
+        : Math.round(((loc.start.displayed.page || 1) / (loc.start.displayed.total || 1)) * 100);
+      $('progress-fill').style.width = pct + '%';
+      $('progress-pct').textContent = pct + '%';
+      localStorage.setItem(progKey(fileId), String(pct));
+    });
+
+    book.loaded.navigation.then((nav) => populateTOC(nav.toc));
+    book.ready.then(() => book.locations.generate(1200)).catch(()=>{});
+
+    $('reader-title').textContent = name;
+    libraryEl.classList.add('hidden');
+    readerEl.classList.add('active');
+
+    upsertRecent(fileId, name);
+  }
+
+  function registerThemes(){
+    rendition.themes.register('light', {
+      body:{ background:'#efe6d3 !important', color:'#241f1a !important' }
+    });
+    rendition.themes.register('sepia', {
+      body:{ background:'#e8d9b8 !important', color:'#3a2f22 !important' }
+    });
+    rendition.themes.register('dark', {
+      body:{ background:'#17281f !important', color:'#efe6d3 !important' }
+    });
+  }
+
+  function populateTOC(toc){
+    const list = $('toc-list');
+    list.innerHTML = '';
+    (toc || []).forEach((item) => {
+      const a = document.createElement('a');
+      a.href = '#'; a.textContent = item.label.trim();
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        rendition.display(item.href);
+        tocDrawer.classList.remove('open');
+      });
+      list.appendChild(a);
+    });
+  }
+
+  function upsertRecent(fileId, name){
+    let list = loadRecents().filter(b => b.id !== fileId);
+    list.unshift({ id: fileId, name, color: spineColor(name), ts: Date.now() });
+    saveRecents(list);
+    renderRecents();
+  }
+
+  function renderRecents(){
+    const grid = $('recents-grid');
+    const list = loadRecents();
+    grid.innerHTML = '';
+    if(!list.length){
+      grid.innerHTML = '<div class="empty-state">No books yet — open one from Google Drive to start your shelf.</div>';
+      return;
+    }
+    list.forEach((b) => {
+      const card = document.createElement('button');
+      card.className = 'book-card';
+      const pct = localStorage.getItem(progKey(b.id)) || 0;
+      card.innerHTML = `
+        <div class="book-spine" style="background:${b.color}"></div>
+        <div class="book-card-body">
+          <div class="book-title">${escapeHtml(b.name.replace(/\.epub$/i,''))}</div>
+          <div class="book-meta">${pct}% read</div>
+          <div class="book-progress"><span style="width:${pct}%"></span></div>
+        </div>`;
+      card.addEventListener('click', () => {
+        requestToken(false).then(() => openBookFromDrive(b.id, b.name)).catch((err) => {
+          if(err && err.message === 'missing-config') return;
+          requestToken(true).then(() => openBookFromDrive(b.id, b.name));
+        });
+      });
+      grid.appendChild(card);
+    });
+  }
+
+  function escapeHtml(s){
+    return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ---------- Reader controls ----------
+  $('back-btn').addEventListener('click', () => {
+    readerEl.classList.remove('active');
+    libraryEl.classList.remove('hidden');
+    renderRecents();
+  });
+
+  $('prev-zone').addEventListener('click', () => rendition && rendition.prev());
+  $('next-zone').addEventListener('click', () => rendition && rendition.next());
+  document.addEventListener('keydown', (e) => {
+    if(!readerEl.classList.contains('active')) return;
+    if(e.key === 'ArrowLeft') rendition.prev();
+    if(e.key === 'ArrowRight') rendition.next();
+  });
+
+  $('font-minus-btn').addEventListener('click', () => {
+    fontSize = Math.max(70, fontSize - 10);
+    if(rendition) rendition.themes.fontSize(fontSize + '%');
+  });
+  $('font-plus-btn').addEventListener('click', () => {
+    fontSize = Math.min(180, fontSize + 10);
+    if(rendition) rendition.themes.fontSize(fontSize + '%');
+  });
+
+  $('theme-btn').addEventListener('click', () => {
+    themeIdx = (themeIdx + 1) % THEMES.length;
+    if(rendition) rendition.themes.select(THEMES[themeIdx]);
+  });
+
+  $('toc-btn').addEventListener('click', () => tocDrawer.classList.toggle('open'));
+  document.addEventListener('click', (e) => {
+    if(tocDrawer.classList.contains('open') && !tocDrawer.contains(e.target) && e.target.id !== 'toc-btn'){
+      tocDrawer.classList.remove('open');
+    }
+  });
+
+})();
+</script>
+<!-- hola -->
+</body>
+</html>
