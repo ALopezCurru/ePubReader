@@ -6,28 +6,29 @@
 <title>Athenaeum — ePub Reader for Google Drive</title>
 
 <!--
-  ATHENAEUM — a self-contained ePub reader that opens books straight from Google Drive.
+  ATHENAEUM — a self-contained ePub reader that opens books straight from Google Drive
+  via publicly-shared links. No sign-in required.
   ────────────────────────────────────────────────────────────────────────────────────
   SETUP (do this once):
   1. Go to https://console.cloud.google.com/ and create a project (or use an existing one).
-  2. APIs & Services → Library → enable "Google Drive API" and "Google Picker API".
+  2. APIs & Services → Library → enable "Google Drive API".
   3. APIs & Services → Credentials → Create Credentials → API key. Copy it.
-  4. APIs & Services → Credentials → Create Credentials → OAuth client ID → Web application.
-     - Add an Authorized JavaScript origin for wherever this file will be hosted,
-       e.g. https://yourname.github.io  (Google Sites' own "Embed by URL" iframe
-       does NOT need to be listed — only the origin that actually SERVES this file).
-     - Copy the Client ID.
-  5. OAuth consent screen → add your own Google account under "Test users" if the
-     app is in Testing mode (fine for personal use).
-  6. Open this page, click the gear icon, and paste in the API key + Client ID.
-     They're saved in your browser's localStorage only — never sent anywhere else.
+  4. Restrict the key: click the key → Application restrictions → Websites → add the
+     domain that will host this file (e.g. https://yourname.github.io/*). Then under
+     API restrictions, limit it to just "Google Drive API".
+  5. Paste that key into DEFAULT_CONFIG.apiKey below, so it's baked into the page and
+     every visitor's browser has it automatically — no per-device setup.
+
+  HOW BOOKS ARE OPENED:
+  This version only opens files shared as "Anyone with the link – Viewer" in Drive.
+  Right-click a file in Drive → Share → change access → Copy link → paste it into the
+  reader. There's no Google account sign-in step at all.
 
   DEPLOYING TO GOOGLE SITES:
-  Google Sites' "Embed code" box renders in a sandboxed iframe that can break Google
-  Sign-In. The reliable path is: host this single file somewhere with a real URL
+  Google Sites' "Embed code" box renders in a sandboxed iframe that can behave
+  unpredictably. The reliable path is: host this single file somewhere with a real URL
   (GitHub Pages, Firebase Hosting, Cloudflare Pages, etc. — all free), then in Google
-  Sites use Insert → Embed → "By URL" and paste that link. That gives the page a
-  proper origin so OAuth and the Drive Picker work normally.
+  Sites use Insert → Embed → "By URL" and paste that link.
 -->
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -35,8 +36,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
-<script src="https://apis.google.com/js/api.js"></script>
-<script src="https://accounts.google.com/gsi/client"></script>
 
 <style>
   :root{
@@ -125,11 +124,6 @@
   .link-row input:focus{ outline:none; border-color:var(--brass-bright); }
   .link-row .ghost-btn{ border-radius:999px; }
   .link-hint{ font-size:12px; color:var(--sage); max-width:520px; margin:10px 0 0; line-height:1.5; }
-
-  .book-tag{
-    font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:var(--brass-bright);
-    border:1px solid var(--rule); border-radius:999px; padding:2px 8px; align-self:flex-start;
-  }
 
   .shelf-label{
     font-size:12px; letter-spacing:0.12em; text-transform:uppercase; color:var(--sage);
@@ -271,15 +265,11 @@
   <div id="library">
     <div class="library-intro">
       <h1>Your shelf, wherever your books live.</h1>
-      <p>Athenaeum opens ePub files straight out of your Google Drive — nothing is uploaded anywhere else, and nothing is stored on a server. Connect your Drive, pick a book, and read.</p>
+      <p>Athenaeum opens ePub files straight out of your Google Drive — nothing is uploaded anywhere else, and nothing is stored on a server. Paste a share link and read.</p>
     </div>
-    <button class="primary-btn" id="open-drive-btn">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
-      Open a book from Google Drive
-    </button>
 
     <div class="link-row">
-      <input type="text" id="link-input" placeholder="Or paste a Google Drive share link…">
+      <input type="text" id="link-input" placeholder="Paste a Google Drive share link…">
       <button class="ghost-btn" id="open-link-btn">Open</button>
     </div>
     <p class="link-hint">Works with no sign-in, on any device — as long as the file in Drive is shared as "Anyone with the link".</p>
@@ -329,18 +319,13 @@
 <!-- Settings modal -->
 <div class="modal-backdrop" id="settings-modal">
   <div class="modal">
-    <h2>Connect Google Drive</h2>
-    <p class="hint">Paste in the API key and OAuth Client ID from your own Google Cloud project. These stay in this browser only. See the setup steps in the page source comments if you haven't created these yet.</p>
-    <div class="field">
-      <label for="input-client-id">OAuth Client ID</label>
-      <input id="input-client-id" type="text" placeholder="xxxxxxxx.apps.googleusercontent.com">
-    </div>
+    <h2>Drive API Key</h2>
+    <p class="hint">This is already baked into the page by default — you only need this if you want to override it for this browser. Paste in the API key from your own Google Cloud project. See the setup steps in the page source comments if you haven't created one yet.</p>
     <div class="field">
       <label for="input-api-key">API Key</label>
       <input id="input-api-key" type="text" placeholder="AIza...">
     </div>
     <div class="modal-actions">
-      <button class="ghost-btn" id="disconnect-btn">Disconnect</button>
       <button class="primary-btn" id="save-settings-btn">Save</button>
     </div>
     <div class="status-line" id="settings-status"></div>
@@ -354,31 +339,23 @@
   // ---------- Config / storage ----------
   const CFG_KEY = 'athenaeum_config';
   const RECENTS_KEY = 'athenaeum_recents';
-  const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
 
-  // Fill these in with your own values from Google Cloud Console (see setup steps
-  // in the comment at the top of this file). Neither value is a secret: the Client
-  // ID is meant to be public, and the API key is locked to your domain via the
-  // HTTP referrer restriction you set on it — so it's safe to hardcode here. Doing
+  // Fill this in with your own value from Google Cloud Console (see setup steps in
+  // the comment at the top of this file). It's safe to hardcode here: the key is
+  // locked to your domain via the HTTP referrer restriction you set on it. Doing
   // this means every browser/device opening your published link works immediately,
   // with no per-device setup step.
-  const DEFAULT_CONFIG = {
-    clientId: '109236790736-sd013pkrddbsgsa883e377tuif8fasue.apps.googleusercontent.com',
-    apiKey: 'AIzaSyDbInUvzpTqAPjCx6wBXPYWxMO7betNVHg'
-  };
+  const PLACEHOLDER_API_KEY = 'AIzaSyDbInUvzpTqAPjCx6wBXPYWxMO7betNVHg';
+  const DEFAULT_CONFIG = { apiKey: PLACEHOLDER_API_KEY };
 
   function loadConfig(){
     let stored = {};
     try{ stored = JSON.parse(localStorage.getItem(CFG_KEY)) || {}; }catch(e){ stored = {}; }
-    return {
-      clientId: stored.clientId || DEFAULT_CONFIG.clientId,
-      apiKey: stored.apiKey || DEFAULT_CONFIG.apiKey
-    };
+    return { apiKey: stored.apiKey || DEFAULT_CONFIG.apiKey };
   }
   function saveConfig(cfg){ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
   function isConfigured(cfg){
-    return !!cfg.clientId && !!cfg.apiKey &&
-      cfg.clientId !== DEFAULT_CONFIG.clientId && cfg.apiKey !== DEFAULT_CONFIG.apiKey;
+    return !!cfg.apiKey && cfg.apiKey !== PLACEHOLDER_API_KEY;
   }
 
   function loadRecents(){
@@ -398,10 +375,6 @@
   }
 
   // ---------- App state ----------
-  let tokenClient = null;
-  let accessToken = null;
-  let pickerLoaded = false;
-  let gapiLoaded = false;
   let book = null, rendition = null, currentFileId = null;
   let fontSize = 100;
   let themeIdx = 0;
@@ -416,8 +389,7 @@
   // ---------- Settings modal ----------
   function openSettings(){
     const cfg = loadConfig();
-    $('input-client-id').value = cfg.clientId || '';
-    $('input-api-key').value = cfg.apiKey || '';
+    $('input-api-key').value = (cfg.apiKey === PLACEHOLDER_API_KEY) ? '' : cfg.apiKey;
     settingsStatus.textContent = '';
     settingsStatus.className = 'status-line';
     settingsModal.classList.add('open');
@@ -428,126 +400,19 @@
   settingsModal.addEventListener('click', (e)=>{ if(e.target === settingsModal) closeSettings(); });
 
   $('save-settings-btn').addEventListener('click', () => {
-    const clientId = $('input-client-id').value.trim();
     const apiKey = $('input-api-key').value.trim();
-    if(!clientId || !apiKey){
-      settingsStatus.textContent = 'Both fields are required.';
+    if(!apiKey){
+      settingsStatus.textContent = 'API key is required.';
       settingsStatus.className = 'status-line error';
       return;
     }
-    saveConfig({clientId, apiKey});
-    tokenClient = null; accessToken = null; // force re-init with new credentials
-    settingsStatus.textContent = 'Saved. You can close this and connect Drive.';
+    saveConfig({apiKey});
+    settingsStatus.textContent = 'Saved.';
     settingsStatus.className = 'status-line';
     setTimeout(closeSettings, 700);
   });
 
-  $('disconnect-btn').addEventListener('click', () => {
-    if(accessToken && window.google && google.accounts){
-      google.accounts.oauth2.revoke(accessToken, () => {});
-    }
-    accessToken = null; tokenClient = null;
-    settingsStatus.textContent = 'Disconnected from this session.';
-    settingsStatus.className = 'status-line';
-  });
-
-  // ---------- Google API bootstrap ----------
-  window.addEventListener('load', () => {
-    // gapi (for Picker) and GIS (for OAuth) load via their own <script onload> in most
-    // setups, but since we didn't wire inline onload attrs, poll briefly instead.
-    const check = setInterval(() => {
-      if(window.gapi && !gapiLoaded){
-        gapiLoaded = true;
-        gapi.load('picker', () => { pickerLoaded = true; });
-      }
-      if(window.google && google.accounts && window.gapi){
-        clearInterval(check);
-      }
-    }, 150);
-    renderRecents();
-  });
-
-  function ensureTokenClient(){
-    const cfg = loadConfig();
-    if(!isConfigured(cfg)) return null;
-    if(!tokenClient){
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: cfg.clientId,
-        scope: SCOPES,
-        callback: () => {}, // overridden per-call below
-      });
-    }
-    return tokenClient;
-  }
-
-  function requestToken(interactive){
-    return new Promise((resolve, reject) => {
-      const cfg = loadConfig();
-      if(!isConfigured(cfg)){
-        openSettings();
-        reject(new Error('missing-config'));
-        return;
-      }
-      const client = ensureTokenClient();
-      if(!client){ reject(new Error('missing-config')); return; }
-      client.callback = (resp) => {
-        if(resp.error){ reject(resp); return; }
-        accessToken = resp.access_token;
-        resolve(accessToken);
-      };
-      client.requestAccessToken({ prompt: (interactive || !accessToken) ? 'consent' : '' });
-    });
-  }
-
-  // ---------- Drive Picker ----------
-  function openPicker(){
-    requestToken(!accessToken).then(() => {
-      if(!pickerLoaded){
-        setTimeout(openPicker, 300); // picker script still loading
-        return;
-      }
-      const cfg = loadConfig();
-      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
-        .setMimeTypes('application/epub+zip')
-        .setIncludeFolders(true)
-        .setSelectFolderEnabled(false);
-      const picker = new google.picker.PickerBuilder()
-        .addView(view)
-        .setOAuthToken(accessToken)
-        .setDeveloperKey(cfg.apiKey)
-        .setCallback(pickerCallback)
-        .build();
-      picker.setVisible(true);
-    }).catch((err) => {
-      if(err && err.message === 'missing-config') return;
-      console.error(err);
-    });
-  }
-
-  function pickerCallback(data){
-    if(data.action === google.picker.Action.PICKED){
-      const doc = data.docs[0];
-      openBookFromDrive(doc.id, doc.name);
-    }
-  }
-
-  $('open-drive-btn').addEventListener('click', openPicker);
-
-  // ---------- Fetching & rendering the book (signed-in, private files) ----------
-  function openBookFromDrive(fileId, name){
-    fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-      headers: { Authorization: 'Bearer ' + accessToken }
-    }).then((res) => {
-      if(res.status === 401){
-        return requestToken(true).then(() => openBookFromDrive(fileId, name));
-      }
-      if(!res.ok) throw new Error('Drive fetch failed: ' + res.status);
-      return res.arrayBuffer().then((buf) => loadBook(buf, fileId, name, 'private'));
-    }).catch((err) => {
-      console.error(err);
-      alert('Could not open that file from Drive. Check the console for details.');
-    });
-  }
+  window.addEventListener('load', renderRecents);
 
   // ---------- Fetching & rendering the book (no sign-in, publicly shared files) ----------
   function extractFileId(raw){
@@ -584,7 +449,7 @@
           if(!res.ok) throw new Error('fetch-failed:' + res.status);
           return res.arrayBuffer();
         })
-        .then((buf) => loadBook(buf, fileId, name, 'public'));
+        .then((buf) => loadBook(buf, fileId, name));
     }).catch((err) => {
       console.error(err);
       alert('Could not open that file. In Google Drive, right-click it → Share → change access to "Anyone with the link – Viewer", then try again.');
@@ -596,7 +461,7 @@
     if(e.key === 'Enter') openBookFromLink($('link-input').value);
   });
 
-  function loadBook(arrayBuffer, fileId, name, source){
+  function loadBook(arrayBuffer, fileId, name){
     currentFileId = fileId;
     if(rendition){ try{ rendition.destroy(); }catch(e){} }
     $('page-indicator').textContent = '—';
@@ -643,7 +508,7 @@
     libraryEl.classList.add('hidden');
     readerEl.classList.add('active');
 
-    upsertRecent(fileId, name, source);
+    upsertRecent(fileId, name);
   }
 
   function registerThemes(){
@@ -673,9 +538,9 @@
     });
   }
 
-  function upsertRecent(fileId, name, source){
+  function upsertRecent(fileId, name){
     let list = loadRecents().filter(b => b.id !== fileId);
-    list.unshift({ id: fileId, name, source: source || 'private', color: spineColor(name), ts: Date.now() });
+    list.unshift({ id: fileId, name, color: spineColor(name), ts: Date.now() });
     saveRecents(list);
     renderRecents();
   }
@@ -685,32 +550,21 @@
     const list = loadRecents();
     grid.innerHTML = '';
     if(!list.length){
-      grid.innerHTML = '<div class="empty-state">No books yet — open one from Google Drive to start your shelf.</div>';
+      grid.innerHTML = '<div class="empty-state">No books yet — paste a Drive link above to start your shelf.</div>';
       return;
     }
     list.forEach((b) => {
       const card = document.createElement('button');
       card.className = 'book-card';
       const pct = localStorage.getItem(progKey(b.id)) || 0;
-      const tag = b.source === 'public' ? '<div class="book-tag">no sign-in</div>' : '';
       card.innerHTML = `
         <div class="book-spine" style="background:${b.color}"></div>
         <div class="book-card-body">
-          ${tag}
           <div class="book-title">${escapeHtml(b.name.replace(/\.epub$/i,''))}</div>
           <div class="book-meta">${pct}% read</div>
           <div class="book-progress"><span style="width:${pct}%"></span></div>
         </div>`;
-      card.addEventListener('click', () => {
-        if(b.source === 'public'){
-          openBookFromPublicId(b.id);
-          return;
-        }
-        requestToken(false).then(() => openBookFromDrive(b.id, b.name)).catch((err) => {
-          if(err && err.message === 'missing-config') return;
-          requestToken(true).then(() => openBookFromDrive(b.id, b.name));
-        });
-      });
+      card.addEventListener('click', () => openBookFromPublicId(b.id));
       grid.appendChild(card);
     });
   }
