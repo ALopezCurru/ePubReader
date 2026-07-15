@@ -16,8 +16,8 @@
   4. Restrict the key: click the key → Application restrictions → Websites → add the
      domain that will host this file (e.g. https://yourname.github.io/*). Then under
      API restrictions, limit it to just "Google Drive API".
-  5. Paste that key into DEFAULT_CONFIG.apiKey below, so it's baked into the page and
-     every visitor's browser has it automatically — no per-device setup.
+  5. Paste that key into the API_KEY constant near the top of the script below, so
+     it's baked into the page and works for every visitor automatically.
 
   HOW BOOKS ARE OPENED:
   This version only opens files shared as "Anyone with the link – Viewer" in Drive.
@@ -82,16 +82,6 @@
     letter-spacing:0.01em; color:var(--parchment);
   }
   .brand-tag{ font-size:12px; color:var(--sage); letter-spacing:0.08em; text-transform:uppercase; margin-top:2px;}
-
-  .icon-btn{
-    background:transparent; border:1px solid var(--rule); color:var(--parchment);
-    width:38px; height:38px; border-radius:50%; cursor:pointer;
-    display:flex; align-items:center; justify-content:center;
-    transition:border-color .15s, transform .15s, background .15s;
-  }
-  .icon-btn:hover{ border-color:var(--brass-bright); background:rgba(184,134,59,0.12); }
-  .icon-btn:active{ transform:scale(0.94); }
-  .icon-btn svg{ width:18px; height:18px; stroke:var(--parchment); }
 
   /* ---------- Library view ---------- */
   #library{ flex:1; padding:clamp(24px,5vw,56px) clamp(18px,4vw,48px) 60px; }
@@ -207,33 +197,11 @@
   }
   #toc-list a:hover{ background:rgba(184,134,59,0.12); color:var(--parchment); }
 
-  /* Settings modal */
-  .modal-backdrop{
-    position:fixed; inset:0; background:rgba(9,15,11,0.6); display:none;
-    align-items:center; justify-content:center; z-index:100; padding:20px;
-  }
-  .modal-backdrop.open{ display:flex; }
-  .modal{
-    background:var(--spruce-900); border:1px solid var(--rule); border-radius:var(--radius);
-    max-width:460px; width:100%; padding:28px; box-shadow:var(--shadow);
-  }
-  .modal h2{ font-family:var(--font-display); margin:0 0 6px; font-size:20px; color:var(--parchment); }
-  .modal p.hint{ font-size:13px; color:var(--sage); margin:0 0 20px; line-height:1.5; }
-  .field{ margin-bottom:16px; }
-  .field label{ display:block; font-size:12px; color:var(--sage); margin-bottom:6px; letter-spacing:0.03em; }
-  .field input{
-    width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--rule);
-    background:var(--spruce-950); color:var(--parchment); font-family:var(--font-ui); font-size:13px;
-  }
-  .field input:focus{ outline:none; border-color:var(--brass-bright); }
-  .modal-actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
   .ghost-btn{
     background:transparent; border:1px solid var(--rule); color:var(--parchment);
     padding:10px 16px; border-radius:8px; cursor:pointer; font-family:var(--font-ui); font-size:13px;
   }
   .ghost-btn:hover{ border-color:var(--brass-bright); }
-  .status-line{ font-size:12px; color:var(--sage); margin-top:14px; min-height:16px; }
-  .status-line.error{ color:#d98b6c; }
 
   @media (max-width:640px){
     .reader-title{ max-width:30vw; }
@@ -256,9 +224,6 @@
         <div class="brand-tag">your drive, bound</div>
       </div>
     </div>
-    <button class="icon-btn" id="settings-btn" title="Settings" aria-label="Settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-    </button>
   </div>
 
   <!-- Library -->
@@ -316,47 +281,17 @@
   <div id="toc-list"></div>
 </div>
 
-<!-- Settings modal -->
-<div class="modal-backdrop" id="settings-modal">
-  <div class="modal">
-    <h2>Drive API Key</h2>
-    <p class="hint">This is already baked into the page by default — you only need this if you want to override it for this browser. Paste in the API key from your own Google Cloud project. See the setup steps in the page source comments if you haven't created one yet.</p>
-    <div class="field">
-      <label for="input-api-key">API Key</label>
-      <input id="input-api-key" type="text" placeholder="AIza...">
-    </div>
-    <div class="modal-actions">
-      <button class="primary-btn" id="save-settings-btn">Save</button>
-    </div>
-    <div class="status-line" id="settings-status"></div>
-  </div>
-</div>
-
 <script>
 (function(){
   "use strict";
 
-  // ---------- Config / storage ----------
-  const CFG_KEY = 'athenaeum_config';
+  // ---------- Config ----------
   const RECENTS_KEY = 'athenaeum_recents';
 
   // Fill this in with your own value from Google Cloud Console (see setup steps in
   // the comment at the top of this file). It's safe to hardcode here: the key is
-  // locked to your domain via the HTTP referrer restriction you set on it. Doing
-  // this means every browser/device opening your published link works immediately,
-  // with no per-device setup step.
-  const PLACEHOLDER_API_KEY = 'AIzaSyDbInUvzpTqAPjCx6wBXPYWxMO7betNVHg';
-  const DEFAULT_CONFIG = { apiKey: PLACEHOLDER_API_KEY };
-
-  function loadConfig(){
-    let stored = {};
-    try{ stored = JSON.parse(localStorage.getItem(CFG_KEY)) || {}; }catch(e){ stored = {}; }
-    return { apiKey: stored.apiKey || DEFAULT_CONFIG.apiKey };
-  }
-  function saveConfig(cfg){ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
-  function isConfigured(cfg){
-    return !!cfg.apiKey && cfg.apiKey !== PLACEHOLDER_API_KEY;
-  }
+  // locked to your domain via the HTTP referrer restriction you set on it.
+  const API_KEY = 'AIzaSyDbInUvzpTqAPjCx6wBXPYWxMO7betNVHg';
 
   function loadRecents(){
     try{ return JSON.parse(localStorage.getItem(RECENTS_KEY)) || []; }catch(e){ return []; }
@@ -383,34 +318,7 @@
   // ---------- DOM refs ----------
   const $ = (id) => document.getElementById(id);
   const libraryEl = $('library'), readerEl = $('reader');
-  const settingsModal = $('settings-modal'), settingsStatus = $('settings-status');
   const tocDrawer = $('toc-drawer');
-
-  // ---------- Settings modal ----------
-  function openSettings(){
-    const cfg = loadConfig();
-    $('input-api-key').value = (cfg.apiKey === PLACEHOLDER_API_KEY) ? '' : cfg.apiKey;
-    settingsStatus.textContent = '';
-    settingsStatus.className = 'status-line';
-    settingsModal.classList.add('open');
-  }
-  function closeSettings(){ settingsModal.classList.remove('open'); }
-
-  $('settings-btn').addEventListener('click', openSettings);
-  settingsModal.addEventListener('click', (e)=>{ if(e.target === settingsModal) closeSettings(); });
-
-  $('save-settings-btn').addEventListener('click', () => {
-    const apiKey = $('input-api-key').value.trim();
-    if(!apiKey){
-      settingsStatus.textContent = 'API key is required.';
-      settingsStatus.className = 'status-line error';
-      return;
-    }
-    saveConfig({apiKey});
-    settingsStatus.textContent = 'Saved.';
-    settingsStatus.className = 'status-line';
-    setTimeout(closeSettings, 700);
-  });
 
   window.addEventListener('load', renderRecents);
 
@@ -426,8 +334,6 @@
   }
 
   function openBookFromLink(rawLink){
-    const cfg = loadConfig();
-    if(!isConfigured(cfg)){ openSettings(); return; }
     const fileId = extractFileId(rawLink);
     if(!fileId){
       alert('That doesn\'t look like a Google Drive file link. Right-click the file in Drive → Share → Copy link.');
@@ -437,14 +343,13 @@
   }
 
   function openBookFromPublicId(fileId){
-    const cfg = loadConfig();
-    const metaUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name&key=${cfg.apiKey}`;
+    const metaUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name&key=${API_KEY}`;
     fetch(metaUrl).then((res) => {
       if(!res.ok) throw new Error('meta-failed:' + res.status);
       return res.json();
     }).then((meta) => {
       const name = meta.name || 'Untitled.epub';
-      return fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${cfg.apiKey}`)
+      return fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${API_KEY}`)
         .then((res) => {
           if(!res.ok) throw new Error('fetch-failed:' + res.status);
           return res.arrayBuffer();
