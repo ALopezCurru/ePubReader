@@ -197,6 +197,7 @@
   .progress-track{ flex:1; height:4px; border-radius:4px; background:rgba(255,255,255,0.1); overflow:hidden; }
   .progress-track > span{ display:block; height:100%; background:var(--brass-bright); width:0%; }
   .progress-pct{ font-size:12px; color:var(--sage); min-width:38px; text-align:right; }
+  .page-indicator{ font-size:12px; color:var(--sage); white-space:nowrap; font-variant-numeric:tabular-nums; }
 
   /* TOC drawer */
   #toc-drawer{
@@ -311,6 +312,7 @@
     </div>
 
     <div class="reader-footer">
+      <div class="page-indicator" id="page-indicator">—</div>
       <div class="progress-track"><span id="progress-fill"></span></div>
       <div class="progress-pct" id="progress-pct">0%</div>
     </div>
@@ -354,10 +356,30 @@
   const RECENTS_KEY = 'athenaeum_recents';
   const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
 
+  // Fill these in with your own values from Google Cloud Console (see setup steps
+  // in the comment at the top of this file). Neither value is a secret: the Client
+  // ID is meant to be public, and the API key is locked to your domain via the
+  // HTTP referrer restriction you set on it — so it's safe to hardcode here. Doing
+  // this means every browser/device opening your published link works immediately,
+  // with no per-device setup step.
+  const DEFAULT_CONFIG = {
+    clientId: '109236790736-sd013pkrddbsgsa883e377tuif8fasue.apps.googleusercontent.com',
+    apiKey: 'AIzaSyDbInUvzpTqAPjCx6wBXPYWxMO7betNVHg'
+  };
+
   function loadConfig(){
-    try{ return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; }catch(e){ return {}; }
+    let stored = {};
+    try{ stored = JSON.parse(localStorage.getItem(CFG_KEY)) || {}; }catch(e){ stored = {}; }
+    return {
+      clientId: stored.clientId || DEFAULT_CONFIG.clientId,
+      apiKey: stored.apiKey || DEFAULT_CONFIG.apiKey
+    };
   }
   function saveConfig(cfg){ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+  function isConfigured(cfg){
+    return !!cfg.clientId && !!cfg.apiKey &&
+      cfg.clientId !== DEFAULT_CONFIG.clientId && cfg.apiKey !== DEFAULT_CONFIG.apiKey;
+  }
 
   function loadRecents(){
     try{ return JSON.parse(localStorage.getItem(RECENTS_KEY)) || []; }catch(e){ return []; }
@@ -447,7 +469,7 @@
 
   function ensureTokenClient(){
     const cfg = loadConfig();
-    if(!cfg.clientId || !cfg.apiKey) return null;
+    if(!isConfigured(cfg)) return null;
     if(!tokenClient){
       tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: cfg.clientId,
@@ -461,7 +483,7 @@
   function requestToken(interactive){
     return new Promise((resolve, reject) => {
       const cfg = loadConfig();
-      if(!cfg.clientId || !cfg.apiKey){
+      if(!isConfigured(cfg)){
         openSettings();
         reject(new Error('missing-config'));
         return;
@@ -540,7 +562,7 @@
 
   function openBookFromLink(rawLink){
     const cfg = loadConfig();
-    if(!cfg.apiKey){ openSettings(); return; }
+    if(!isConfigured(cfg)){ openSettings(); return; }
     const fileId = extractFileId(rawLink);
     if(!fileId){
       alert('That doesn\'t look like a Google Drive file link. Right-click the file in Drive → Share → Copy link.');
@@ -577,6 +599,7 @@
   function loadBook(arrayBuffer, fileId, name, source){
     currentFileId = fileId;
     if(rendition){ try{ rendition.destroy(); }catch(e){} }
+    $('page-indicator').textContent = '—';
     book = ePub(arrayBuffer);
     rendition = book.renderTo('viewer', { width: '100%', height: '100%', flow: 'paginated', spread: 'auto' });
 
@@ -587,7 +610,10 @@
     const savedLoc = localStorage.getItem(locKey(fileId));
     rendition.display(savedLoc || undefined);
 
+    let lastLoc = null;
+
     rendition.on('relocated', (loc) => {
+      lastLoc = loc;
       localStorage.setItem(locKey(fileId), loc.start.cfi);
       const pct = book.locations && book.locations.length()
         ? Math.round(book.locations.percentageFromCfi(loc.start.cfi) * 100)
@@ -595,10 +621,23 @@
       $('progress-fill').style.width = pct + '%';
       $('progress-pct').textContent = pct + '%';
       localStorage.setItem(progKey(fileId), String(pct));
+      updatePageIndicator(loc);
     });
 
+    function updatePageIndicator(loc){
+      if(book.locations && book.locations.length()){
+        const current = book.locations.locationFromCfi(loc.start.cfi);
+        const total = book.locations.length();
+        $('page-indicator').textContent = `Page ${current} of ${total}`;
+      } else {
+        $('page-indicator').textContent = '';
+      }
+    }
+
     book.loaded.navigation.then((nav) => populateTOC(nav.toc));
-    book.ready.then(() => book.locations.generate(1200)).catch(()=>{});
+    book.ready.then(() => book.locations.generate(1200)).then(() => {
+      if(lastLoc) updatePageIndicator(lastLoc);
+    }).catch(()=>{});
 
     $('reader-title').textContent = name;
     libraryEl.classList.add('hidden');
